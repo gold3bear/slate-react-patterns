@@ -1,0 +1,319 @@
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import './App.css'
+import { Slate, Editable, withReact, RenderElementProps, RenderLeafProps, useSlate } from 'slate-react'
+import { createEditor, Descendant, Transforms, Range, Editor, Text, Element, NodeEntry, Path as SlateNodePath, Node as SlateNode } from 'slate'
+import { LeafEdge } from 'slate/dist/interfaces/types'
+import { withHistory } from "slate-history";
+import { LinkElement } from './@types/editor'
+
+
+const CodeElement = (props: RenderElementProps) => {
+  return (
+    <pre {...props.attributes}>
+      <code>{props.children}</code>
+    </pre>
+  )
+}
+
+const DefaultElement = (props: RenderElementProps) => {
+  return <p {...props.attributes}>{props.children}</p>
+}
+
+
+const LinkCheckDecorator = (nodeText: string, path: SlateNodePath): Range[] => {
+  const urls = findUrlsInText(nodeText);
+  // console.log('LinkDecorator',urls)
+  return urls.map(([url, index]): Range => {
+    return {
+      anchor: {
+        path,
+        //@ts-expect-error
+        offset: index,
+      },
+      focus: {
+        path,
+        //@ts-expect-error
+        offset: index + url.length,
+      },
+      decoration: "link",
+    };
+  })
+}
+
+const findUrlsInText = (nodeText: string) => {
+  // console.log(nodeText)
+  const urlRegex =
+    /(?:(?:https?|ftp|file):\/\/|www\.|ftp\.)(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[-A-Z0-9+&@#\/%=~_|$?!:,.])*(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[A-Z0-9+&@#\/%=~_|$])/gim;
+  const matches = nodeText.match(urlRegex);
+  // console.log('findUrlsInText',matches);
+
+  return matches ? matches.map((m) => [m.trim(), nodeText.indexOf(m.trim())]) : [];
+};
+
+
+const Leaf = (props: RenderLeafProps) => {
+  let { attributes, children, leaf } = props;
+  //如果是链接,则添加link
+  console.log('Leaf', props.leaf.type);
+  //如果是链接装饰器,则添加a标签
+  if (props.leaf.type === "link") {
+    children = (
+      <a
+        style={{ cursor: "pointer" }}
+        href={leaf.url}
+        onClick={() => {
+          window.open(leaf.text, "_blank", "noopener,noreferrer");
+        }}
+      >
+        {children}
+      </a>
+    );
+  }
+  return <span
+    {...attributes}
+    style={{ fontWeight: props.leaf.bold ? 'bold' : 'normal' }}
+  >
+    {children}
+  </span>
+}
+
+//
+const LinkLeaf = (props: RenderElementProps) => {
+  const { attributes, children, element } = props;
+  return (
+    <a
+      {...attributes}
+      //@ts-expect-error
+      href={element.url}
+    >
+      {children}
+    </a>
+  )
+}
+
+
+const CustomerEditor = {
+  isBoldMarkActive(editor: Editor) {
+    const [match] = Editor.nodes(editor, {
+      match: n => Text.isText(n) && n.bold === true,
+      universal: true
+    })
+    return !!match;
+  },
+  isCodeBlockActive(editor: Editor) {
+
+    const [match] = Editor.nodes(editor, {
+      match: n => Element.isElement(n) && n.type === 'code',
+    })
+    return !!match;
+  },
+  toggleBoldMark(editor: Editor) {
+    const isActive = CustomerEditor.isBoldMarkActive(editor);
+    Transforms.setNodes(editor,
+      { bold: isActive ? null : true },
+      { match: n => Text.isText(n), split: true })
+  },
+  toggleCodeBlock(editor: Editor) {
+    const isActive = CustomerEditor.isCodeBlockActive(editor);
+    Transforms.setNodes(editor,
+      { type: isActive ? 'paragraph' : 'code' },
+      { match: n => Editor.isBlock(editor, n) })
+  },
+  toggleLink(editor: Editor) {
+    // Transforms.setNodes
+    //获取当前选择的区域
+    const { selection } = editor;
+    const isCollapsed = selection && Range.isCollapsed(selection);
+
+    let url = 'http://www.baidu.com'//todo:从弹窗中获取
+
+    console.log('toggleLink', selection, editor.children, editor.getFragment());
+
+    const link: LinkElement = {
+      type: 'link',
+      url,
+      children: isCollapsed ? [{ text: url }] : [],
+    }
+
+    if (isCollapsed) {
+      Transforms.insertNodes(editor, link)
+    } else {
+      Transforms.wrapNodes(editor, link, { split: true })
+      Transforms.collapse(editor, { edge: 'end' })
+    }
+  }
+}
+
+
+
+
+
+//序列化为字符串
+const serialize = (value: Descendant[]) => {
+  return (
+    value.map(n => SlateNode.string(n)).join('\n')
+  )
+}
+
+//将字符串反序列化
+const deserialize = (text: string): Descendant[] => {
+  return text.split('\n').map(line => {
+    return {
+      type: 'paragraph',
+      children: [{ text: line }],
+    }
+  })
+}
+
+
+
+function App() {
+  // const [editor] = useState(() => withReact(createEditor()))
+  const editor = useMemo<Editor>(() => withHistory(withReact(createEditor())), [])
+  const [editor2] = useState(() => withReact(createEditor()))
+
+  //useMemo必须在react作用域内
+  const [value, setValue] = useState(() => {
+    const localData = localStorage.getItem('content');
+    return localData ? deserialize(localData) : [{
+      type: 'paragraph',
+      children: [{ text: '' }],
+    }]
+  })
+  useEffect(
+    () => {
+      /**
+       * 强制设置值,从而update渲染
+       * 参见:https://github.com/ianstormtaylor/slate/issues/4710
+      **/
+      //@ts-expect-error
+      editor2.children = value;
+    },
+    [value],
+  );
+
+
+  //装饰器
+  //@ts-expect-error
+  const decorator = useCallback(([node, path]) => {
+    // console.log('decorator',node,path);
+
+    return [];
+  }, []);
+
+
+  const renderElement = useCallback((props: RenderElementProps) => {
+    console.log('renderElement', props)
+    switch (props.element.type) {
+      case 'code':
+        return <CodeElement {...props} />;
+      case 'link':
+        return <LinkLeaf {...props} />;
+        break;
+      default:
+        return <DefaultElement {...props} />
+    }
+  }, []);
+
+  const renderLeaf = useCallback((props: RenderLeafProps) => {
+    console.log('renderLeaf', props.leaf.type)
+    if (props.leaf.type === "link") {
+      console.log('renderLeaf 2', props.leaf)
+   
+
+    } else {
+      return <Leaf {...props} />
+    }
+
+  }, [])
+
+
+  return (
+    <div className="App">
+      <div className='editor'>
+        <Slate
+          editor={editor}
+          //@ts-ignore
+          value={value}
+          onChange={value => {
+            setValue(value);//更新初始值
+            const isAstChange = editor.operations.some(
+              op => 'set_selection' !== op.type
+            )
+            if (isAstChange) {
+              const content = serialize(value);
+              localStorage.setItem('content', content);
+            }
+          }}
+        >
+          <div className='toolbar'>
+            <button onMouseDown={event => {
+              event.preventDefault();
+              CustomerEditor.toggleBoldMark(editor);
+            }}>
+              Bold
+            </button>
+            <button onMouseDown={event => {
+              event.preventDefault();
+              CustomerEditor.toggleCodeBlock(editor);
+            }}>
+              Code
+            </button>
+            <button onMouseDown={event => {
+              event.preventDefault();
+              CustomerEditor.toggleLink(editor);
+            }}>
+              Link
+            </button>
+
+          </div>
+          <Editable
+            renderElement={renderElement}
+            renderLeaf={renderLeaf}
+            decorate={decorator}
+            onKeyDown={event => {
+              if (!event.ctrlKey) {
+                return;
+              }
+              console.log(event.key,);
+              switch (event.key) {
+                case '`': {
+                  event.preventDefault();
+                  CustomerEditor.toggleCodeBlock(editor);
+                  break;
+                }
+                case 'b': {
+                  event.preventDefault()
+                  CustomerEditor.toggleBoldMark(editor);
+                  break;
+                }
+                default:
+                  break;
+              }
+
+            }}
+
+          />
+        </Slate>
+
+      </div>
+      <div className='preview'>
+        <h4>Preview</h4>
+        <div><input type="text" /></div>
+        <Slate editor={editor2}
+          //@ts-ignore
+          value={value}
+        >
+          <Editable
+            readOnly
+            renderElement={renderElement}
+            renderLeaf={renderLeaf}
+          ></Editable>
+        </Slate>
+      </div>
+    </div>
+  )
+}
+
+
+export default App
